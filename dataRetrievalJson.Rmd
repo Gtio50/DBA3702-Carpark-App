@@ -1,0 +1,108 @@
+---
+title: "GeoJson Read"
+output: html_document
+date: "2024-10-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(geojsonR)
+library(XML)
+library(rvest)
+library(data.table)
+library(tidyverse)
+library(sf)
+library(stringi)
+```
+
+```{r}
+html_to_table <- function(html_string) {
+  # Read HTML string
+  html_doc <- read_html(html_string)
+  # Extract all rows from the table
+  rows <- html_nodes(html_doc, "tr")
+  # Skip the header row (first row with 'Attributes')
+  rows <- rows[-1]
+  # Extract keys (th) and values (td) from each row
+  keys <- sapply(rows, function(x) html_text(html_node(x, "th")))
+  values <- sapply(rows, function(x) html_text(html_node(x, "td")))
+  # Create a single-row data frame with attributes as column names
+  df <- as.data.frame(matrix(values, nrow = 1))
+  colnames(df) <- keys
+  
+  return(df)
+}
+```
+
+```{r}
+json_to_table <- function(i, df){
+  txt <- df[[i]]$properties$Description
+  info <- html_to_table(txt)
+  info$Longtitude <- df[[i]]$geometry$coordinates[1]
+  info$Latitude <- df[[i]]$geometry$coordinates[2]
+  return(setDT(info))
+}
+```
+
+```{r}
+json_to_table_parks <- function(i, data){
+  df <- html_to_table(data$Description[[i]])
+  df <- df %>% select(-INC_CRC, -FMEL_UPD_D)
+  df$Longtitude <- data$geometry[[i]][1]
+  df$Latitude <- data$geometry[[i]][2]
+  return(setDT(df))
+}
+```
+
+```{r}
+gym_loc <- FROM_GeoJson("../Locations/Gym.geojson")
+gym_data <- gym_loc$features
+v <- 1:length(gym_data)
+gym <- rbindlist(lapply(v, json_to_table, gym_data))
+gym <- gym %>% select(-LANDYADDRESSPOINT, -LANDXADDRESSPOINT, -HYPERLINK,
+                      -PHOTOURL, -INC_CRC, -FMEL_UPD_D)
+write.csv(gym, "../Locations Cleaned/gym.csv")
+```
+
+```{r}
+tourist_loc <- FROM_GeoJson("../Locations/Attr.geojson")
+tourist_data <- tourist_loc$features
+v_tour <- 1:length(tourist_data)
+tourist <- rbindlist(lapply(v_tour, json_to_table, tourist_data))
+tourist <- tourist %>% select(-IMAGE_ALT_TEXT, -PHOTOCREDITS, -LASTMODIFIED,
+                              -LATITUDE, -LONGTITUDE, -POSTALCODE, -EXTERNAL_LINK,
+                              -OPENING_HOURS, -INC_CRC, -FMEL_UPD_D, -META_DESCRIPTION)
+tourist$OVERVIEW <- sapply(tourist$OVERVIEW, iconv, from = "UTF-8", to = "ASCII//TRANSLIT")
+write.csv(tourist, "../Locations Cleaned/Tourist & Attractions.csv")
+```
+
+```{r}
+hawker_loc <- FROM_GeoJson("../Locations/Hawker.geojson")
+hawker_data <- hawker_loc$features
+v_hawker <- 1:length(hawker_data)
+hawker <- rbindlist(lapply(v_hawker, json_to_table, hawker_data))
+hawker <- hawker %>% select(-FMEL_UPD_D, -INC_CRC, -IMPLEMENTATION_DATE, -LANDYADDRESSPOINT, -LANDXADDRESSPOINT,
+                            -HUP_COMPLETION_DATE, -ADDRESSBUILDINGNAME, -INFO_ON_CO_LOCATORS,
+                            -APPROXIMATE_GFA, -STATUS, -EST_ORIGINAL_COMPLETION_DATE, 
+                            -DESCRIPTION, -AWARDED_DATE)
+write.csv(hawker, "../Locations Cleaned/Hawkers.csv")
+```
+
+```{r}
+preschool_loc <- FROM_GeoJson("../Locations/Pre.geojson")
+preschool_data <- preschool_loc$features
+v_preschool <- 1:length(preschool_data)
+preschool <- rbindlist(lapply(v_hawker, json_to_table, preschool_data))
+preschool <- preschool %>% select(-CENTRE_CODE, -INC_CRC, -FMEL_UPD_D)
+write.csv(preschool, "../Locations Cleaned/Preschools.csv")
+```
+
+```{r}
+parks_kml <- read_sf(here::here("../Locations/Parks.kml"))
+v_parks <- 1:length(parks_kml[[1]])
+parks <- rbindlist(lapply(v_parks, json_to_table_parks, parks_kml))
+write.csv(parks, "../Locations Cleaned/Parks.csv")
+```
