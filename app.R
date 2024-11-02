@@ -1,6 +1,17 @@
+# Library -----------------------------------------------------------------
 library(shiny)
+library(tidyverse)
+library(readxl)
+library(DT)
+library(plotly)
 
-# Define UI for application that draws a histogram
+# Sources -----------------------------------------------------------------
+source("R/functions.R")
+source("R/server.R")
+source("R/ui.R")
+source("R/data manager.R")
+
+# UI ----------------------------------------------------------------------
 ui <- fluidPage(
 
     # Application title
@@ -23,7 +34,7 @@ ui <- fluidPage(
     )
 )
 
-# Define server logic required to draw a histogram
+# Server ------------------------------------------------------------------
 server <- function(input, output) {
 
     output$distPlot <- renderPlot({
@@ -38,4 +49,5 @@ server <- function(input, output) {
     })
 }
 
+# Run App -----------------------------------------------------------------
 shinyApp(ui = ui, server = server)
