@@ -232,7 +232,6 @@ cp_extract_data <- function(datetime, url){
   setDT(carpark)
   
   carpark[, c("total_lots", "lots_available") := lapply(.SD, as.numeric), .SDcols = c("total_lots", "lots_available")]
-  carpark <- carpark[carpark_number == "CR6" | carpark_number == "Y77L" | carpark_number == "W56L"]
   
   return(carpark)
 }
