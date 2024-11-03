@@ -35,9 +35,10 @@ library(geosphere)
 #   - Postal code
 #   - Short description
 
-####################################################################################################################
 
-####################################################################################################################
+
+# UI ----------------------------------------------------------------------
+
 
 # making the UI
 ui <- fluidPage(
@@ -52,7 +53,7 @@ ui <- fluidPage(
                      options = list(placeholder = 'Name of carpark',
                                     maxItems = 1,
                                     create = TRUE)),
-      sliderInput(inputId = "distance", "Distance:", 
+      sliderInput(inputId = "distance", "Distance/km:", 
                   min = 0, max = 5, value = 0), 
     ),
     mainPanel(
@@ -64,15 +65,14 @@ ui <- fluidPage(
   )
 )
 
-####################################################################################################################
 
-####################################################################################################################
 
-# comment to test 
 
 # Define server logic  
 server <- function(input, output, session) {
-  #######################################################
+
+# Carpark info list -------------------------------------------------------
+
   
   # making a list for the selectizeInput so that users can select their desired carpark, 
   # as well as the coordinates of it to plot on the map
@@ -102,138 +102,158 @@ server <- function(input, output, session) {
   # Update the selectize input choices dynamically with your custom list
   updateSelectizeInput(session, 'carpark', choices = carpark_info_df_names, server = TRUE)
   
-  #######################################################
-  
-  # Calls the data.gov API to make a list of tourist attractions
-  # Output: A dataframe of names of the tourist attractions, as well as their coordinates to plot on the map
-  # 3 NOV 2024: Note: I can't seem to get it to work, used the CSV as a workaround instead.
 
-  # setting up the URl for APi call
-  # url_tourist_info<- "https://api-open.data.gov.sg/v1/public/api/datasets/d_0f2f47515425404e6c9d2a040dd87354/poll-download"
-  
-  # calling the API
-  # data_availability <- RcppSimdJson::fparse(GET(url_tourist_info)$content)
-  
-  # calling only the table with the necessary information
-  ## Note: not sure why it is written in x and y coordinates, don't know how to convert it
-  # data_availability_table <- data_availability$result$records
-  # print(data_availability_table)
-  
-  #converting the x and y coordinates into latitude and longitude
-  # data_availability_table_converted <- st_as_sf(data_availability_table, coords = c("x_coord", "y_coord"), crs = 3414) %>% st_transform(crs = 4326)
-  
-  # add in latitude and longitude into the carpark information
-  # data_availability_table <- data_availability_table %>% mutate(latitude = st_coordinates(carparks_sf)[,2], longitude = st_coordinates(carparks_sf)[,1])
-  
-  
-  # pulling out the addresses only from the API 
-  ##  Note: the API only pulls out the first 100 entries, so we will just work with that.
-  # data_availability_list <- data_availability$result$records$address
-  
-  # Update the selectize input choices dynamically with your custom list
-  # updateSelectizeInput(session, 'text_input', choices = data_availability_list, server = TRUE)
-  
-  ### Alternative method: Using the CSV ###
+
+# Tourist data read -------------------------------------------------------
+
   
   # Reading the CSV
   tourist_attraction_info <- read.csv("Tourist & Attractions.csv")
   # print(tourist_attraction_info)
   
-  
-  
-  #######################################################
-  
   # Calculates the distance between the selected carpark
   # Input: 
   #   - Carpark name from the UI
   #   - Distance limit from the UI
-  # Output: A list of attractions that are within the distance limit
-  ## Problem: Map doesn't load
+  # Output: 
+  #   - A list of attractions that are within the distance limit
   
-  # Reactive expression to get selected carpark location
+  # Reactive expression to get selected carpark, as well as its coordinates
   selected_carpark <- reactive({
     req(input$carpark)
+    # finds matching carpark in the dataframe
     carpark_info_df %>%
-      filter(car_park_no == input$carpark) %>%
+      filter(address == input$carpark) %>%
       transmute(
-        car_park_no,
+        address,
         carpark_lat = latitude,
         carpark_lon = longitude
       )
   })
   
   # Reactive expression to calculate nearby attractions
-  nearby_attractions <- eventReactive(input$update, {
+  nearby_attractions <- reactive({
+    # Check to see if there's any inputted distance from the UI, as well as the selected carpark dataframe
     req(input$distance, selected_carpark())
     
     # Extract carpark coordinates
     carpark_coords <- c(selected_carpark()$carpark_lon, selected_carpark()$carpark_lat)
     
     # Calculate distances to all attractions and filter within input$distance
-    # Calculate distances to all attractions
     tourist_attraction_info %>%
       mutate(
         distance = geosphere::distHaversine(
-          cbind(longitude, latitude),  # Make sure these column names match your tourist data
+          cbind(Longitude, Latitude),  
           matrix(carpark_coords, ncol = 2, byrow = TRUE)
         ),
         distance_km = round(distance / 1000, 2)
       ) %>%
       filter(distance_km <= input$distance) %>%
-      select(name, description, distance_km, latitude, longitude)  # Adjust column names as needed
+      select(PAGETITLE, ADDRESS, OVERVIEW,  distance_km, Longitude, Latitude) 
   })
   
-  #######################################################
+  # print(nearby_attractions)
+
+# Map plotting ------------------------------------------------------------
+
   
-  # Plots the Map on leaflet of the nearest
+  # Plots the Map on leaflet of the nearest points of interests based on the carpark selected
   # Input: 
   #   - The list of tourist attractions based on the distance limit set
-  # Output: A map of the tourist attractions, as well as the description + distance from the carpark, along with the carpark itself
+  # Output: 
+  #   - A map of the tourist attractions, as well as the description + distance from the carpark, along with the carpark itself
+
+# Base map ----------------------------------------------------------------
+
   
-  # Render the map with carpark and nearby attractions
+  # Modified map rendering with conditional plotting
   output$plotPOI <- renderLeaflet({
-    req(selected_carpark())
-    carpark <- selected_carpark()
-    attractions <- nearby_attractions()
     
-    leaflet() %>%
+    # check to see if there is selected carpark or not.
+    req(selected_carpark())
+    
+    # selected carpark is the dataframe of the selected carpark, and their respective latitude and longitude.
+    carpark <- selected_carpark()
+    
+    # Create base map with carpark marker
+    map <- leaflet() %>%
       addTiles() %>%
-      addMarkers(
+      # Adding and changing the carpark marker to have a different colour and icon from the location markers
+      addAwesomeMarkers(
         lng = carpark$carpark_lon,
         lat = carpark$carpark_lat,
         popup = paste0("Carpark: ", carpark$address),
         label = "Carpark Location",
-        icon = icons(iconUrl = "https://example.com/carpark_icon.png", iconSize = c(25, 25))
-      ) %>%
-      # Add circle for search radius
-      addCircles(
-        lng = carpark$carpark_lon,
-        lat = carpark$carpark_lat,
-        radius = input$distance * 1000,  # Convert km to meters
-        color = "red",
-        fillOpacity = 0.1
-      ) %>%
-      # Add markers for attractions if any are found
-      addMarkers(
-        data = attractions,
-        lng = ~longitude,
-        lat = ~latitude,
-        popup = ~paste(
-          "<strong>", name, "</strong><br>",
-          "Distance: ", distance_km, " km<br>",
-          description
-        ),
-        label = ~name
+        icon = makeAwesomeIcon(
+          icon = 'car',
+          markerColor = 'orange',
+          iconColor = 'black',
+          library = 'fa'
+        )
       )
-  })
-  
-  # Render a table with nearby attractions
-  output$attraction_list <- renderTable({
-    nearby_attractions()
-  })
-  
-  #######################################################
 
+# Adding the distance boundary --------------------------------------------
+
+    
+    # Only add circle and attractions if distance is greater than 0
+    if (input$distance > 0) {
+      attractions <- nearby_attractions()
+      
+      # Add search radius circle
+      map <- map %>%
+        addCircles(
+          lng = carpark$carpark_lon,
+          lat = carpark$carpark_lat,
+          radius = input$distance * 1000,  # Convert km to meters
+          color = "red",
+          fillOpacity = 0.1
+        )
+
+# Adding markers for the tourist attractions ------------------------------
+
+      
+      # Add attraction markers only if there are any attractions
+      if (nrow(attractions) > 0) {
+        map <- map %>%
+          addMarkers(
+            data = attractions,
+            lng = ~Longitude,
+            lat = ~Latitude,
+            popup = ~paste(
+              "<strong>", PAGETITLE, "</strong><br>",
+              "Distance: ", distance_km, " km<br>",
+              OVERVIEW
+            ),
+            label = ~PAGETITLE
+          )
+      }
+    }
+    
+    return(map)
+  })
+
+# Attraction list table ---------------------------------------------------
+
+  
+  # modify the attractions table to show nothing when distance is 0
+  output$attraction_list <- renderTable({
+    req(selected_carpark())
+    if (input$distance > 0) {
+      nearby_attractions()
+    } else {
+      # Return empty data frame with same structure
+      data.frame(
+        PAGETITLE = character(),
+        ADDRESS = character(),
+        OVERVIEW = character(),
+        distance_km = numeric(),
+        Longitude = numeric(),
+        Latitude = numeric(),
+        stringsAsFactors = FALSE
+      )
+    }
+  })
+  
 }
 
 shinyApp(ui = ui, server = server)
