@@ -20,6 +20,7 @@ library(future)
 library(purrr)
 library(parallel)
 library(rlang)
+library(geosphere)
 
 # Made by: YH
 
@@ -36,48 +37,6 @@ library(rlang)
 
 ####################################################################################################################
 
-# Functions and elements for map generation
-# The api key
-hdb_url <- "https://api.data.gov.sg/v1/transport/carpark-availability"
-
-# Retrieve and clean api data for carpark availability data
-cp_extract_data <- function(datetime, url){
-  datetime_char <- as.character(datetime)
-  url <- paste0(url, "?date_time=", 
-                substr(datetime_char, 1, 10), "T", 
-                substr(datetime_char, 12, 19))
-  
-  data <- RcppSimdJson::fparse(GET(url)$content)
-  
-  carpark <- setDT(data$items$carpark_data[[1]][,2:3])
-  carpark_info <- setDT(data$items$carpark_data[[1]][,1])
-  carpark$update_datetime <- rep(datetime, length(carpark[[1]]))
-  carpark$total_lots <- sapply(carpark_info, `[[`, 1)
-  carpark$lot_type <- sapply(carpark_info, `[[`, 2)
-  carpark$lots_available <- sapply(carpark_info, `[[`, 3)
-  
-  carpark <- carpark %>% 
-    unnest(cols = c(total_lots, lot_type, lots_available))
-  
-  setDT(carpark)
-  
-  carpark[, c("total_lots", "lots_available") := lapply(.SD, as.numeric), .SDcols = c("total_lots", "lots_available")]
-  
-  return(carpark)
-}
-
-# Takes in a datetime sequence and calls the api for the carpark data
-carpark_historic_data_get <- function(datetime_seq){
-  data <- furrr::future_map(datetime_seq, 
-                            ~ retry_function(cp_extract_data, .x, hdb_url), 
-                            .progress = T, .options = furrr_options(seed = T))
-  bool <- sapply(data, is.data.frame)
-  res <- rbindlist(data[bool])
-  error_dates <- rbind(data[!bool])
-  return(list(results = res, error = error_dates))
-}
-
-
 ####################################################################################################################
 
 # making the UI
@@ -89,19 +48,26 @@ ui <- fluidPage(
     sidebarPanel(
       dateInput(inputId = "date", "Date:", value = Sys.Date()),
       timeInput(inputId = "time", "Time:", value = Sys.time()),
-      selectizeInput(inputID = "carpark", "Enter Carpark:", choices = NULL, 
+      selectizeInput(inputId = "carpark", "Enter Carpark:", choices = NULL, 
                      options = list(placeholder = 'Name of carpark',
                                     maxItems = 1,
                                     create = TRUE)),
-      sliderInput(inputID = "distance", "Distance:", 
+      sliderInput(inputId = "distance", "Distance:", 
                   min = 0, max = 5, value = 0), 
     ),
     mainPanel(
       # To plot the map from server
-      leafletOutput(outputId = "plotPOI")
+      leafletOutput(outputId = "plotPOI"),
+      # Add a table output for the attractions list
+      tableOutput(outputId = "attraction_list")
     )
   )
 )
+
+####################################################################################################################
+
+####################################################################################################################
+
 
 # Define server logic  
 server <- function(input, output, session) {
@@ -114,14 +80,26 @@ server <- function(input, output, session) {
   url_carpark_info <- "https://data.gov.sg/api/action/datastore_search?resource_id=d_23f946fa557947f93a8043bbef41dd09"
   
   # calling the API
-  data_availability <- RcppSimdJson::fparse(GET(url_carpark_info)$content)
+  carpark_info <- RcppSimdJson::fparse(GET(url_carpark_info)$content)
   
   # pulling out the addresses only from the API 
   ##  Note: the API only pulls out the first 100 entries, so we will just work with that.
-  data_availability_list <- data_availability$result$records$address
+  carpark_info_df <- carpark_info$result$records
   
-  # Update the selectize input choices dynamically with the custom list of HDB carparks generated
-  updateSelectizeInput(session, 'text_input', choices = data_availability_list, server = TRUE)
+  #converting the x and y coordinates into latitude and longitude
+  carpark_info_df_converted <- st_as_sf(carpark_info_df, coords = c("x_coord", "y_coord"), crs = 3414) %>%
+    st_transform(crs = 4326)
+  
+  # add in latitude and longitude into the carpark information
+  carpark_info_df <- carpark_info_df %>%
+    mutate(latitude = st_coordinates(carpark_info_df_converted)[,2],
+           longitude = st_coordinates(carpark_info_df_converted)[,1])
+  
+  carpark_info_df_names <- carpark_info_df$address
+  # print(carpark_info_df_names)
+  
+  # Update the selectize input choices dynamically with your custom list
+  updateSelectizeInput(session, 'carpark', choices = carpark_info_df_names, server = TRUE)
   
   #######################################################
   
@@ -130,22 +108,36 @@ server <- function(input, output, session) {
   # 3 NOV 2024: Note: I can't seem to get it to work, used the CSV as a workaround instead.
 
   # setting up the URl for APi call
-  url_tourist_info<- "https://api-open.data.gov.sg/v1/public/api/datasets/d_0f2f47515425404e6c9d2a040dd87354/poll-download"
+  # url_tourist_info<- "https://api-open.data.gov.sg/v1/public/api/datasets/d_0f2f47515425404e6c9d2a040dd87354/poll-download"
   
   # calling the API
-  data_availability <- RcppSimdJson::fparse(GET(url_tourist_info)$content)
+  # data_availability <- RcppSimdJson::fparse(GET(url_tourist_info)$content)
+  
+  # calling only the table with the necessary information
+  ## Note: not sure why it is written in x and y coordinates, don't know how to convert it
+  # data_availability_table <- data_availability$result$records
+  # print(data_availability_table)
+  
+  #converting the x and y coordinates into latitude and longitude
+  # data_availability_table_converted <- st_as_sf(data_availability_table, coords = c("x_coord", "y_coord"), crs = 3414) %>% st_transform(crs = 4326)
+  
+  # add in latitude and longitude into the carpark information
+  # data_availability_table <- data_availability_table %>% mutate(latitude = st_coordinates(carparks_sf)[,2], longitude = st_coordinates(carparks_sf)[,1])
+  
   
   # pulling out the addresses only from the API 
   ##  Note: the API only pulls out the first 100 entries, so we will just work with that.
-  data_availability_list <- data_availability$result$records$address
+  # data_availability_list <- data_availability$result$records$address
   
   # Update the selectize input choices dynamically with your custom list
-  updateSelectizeInput(session, 'text_input', choices = data_availability_list, server = TRUE)
+  # updateSelectizeInput(session, 'text_input', choices = data_availability_list, server = TRUE)
   
   ### Alternative method: Using the CSV ###
   
   # Reading the CSV
   tourist_attraction_info <- read.csv("Tourist & Attractions.csv")
+  # print(tourist_attraction_info)
+  
   
   
   #######################################################
@@ -155,107 +147,92 @@ server <- function(input, output, session) {
   #   - Carpark name from the UI
   #   - Distance limit from the UI
   # Output: A list of attractions that are within the distance limit
+  ## Problem: Map doesn't load
   
-  ### insert code here ###
+  # Reactive expression to get selected carpark location
+  selected_carpark <- reactive({
+    req(input$carpark)
+    carpark_info_df %>%
+      filter(car_park_no == input$carpark) %>%
+      transmute(
+        car_park_no,
+        carpark_lat = latitude,
+        carpark_lon = longitude
+      )
+  })
+  
+  # Reactive expression to calculate nearby attractions
+  nearby_attractions <- eventReactive(input$update, {
+    req(input$distance, selected_carpark())
+    
+    # Extract carpark coordinates
+    carpark_coords <- c(selected_carpark()$carpark_lon, selected_carpark()$carpark_lat)
+    
+    # Calculate distances to all attractions and filter within input$distance
+    # Calculate distances to all attractions
+    tourist_attraction_info %>%
+      mutate(
+        distance = geosphere::distHaversine(
+          cbind(longitude, latitude),  # Make sure these column names match your tourist data
+          matrix(carpark_coords, ncol = 2, byrow = TRUE)
+        ),
+        distance_km = round(distance / 1000, 2)
+      ) %>%
+      filter(distance_km <= input$distance) %>%
+      select(name, description, distance_km, latitude, longitude)  # Adjust column names as needed
+  })
   
   #######################################################
-  
   
   # Plots the Map on leaflet of the nearest
   # Input: 
   #   - The list of tourist attractions based on the distance limit set
   # Output: A map of the tourist attractions, as well as the description + distance from the carpark, along with the carpark itself
   
-  ### insert code here ###
+  # Render the map with carpark and nearby attractions
+  output$plotPOI <- renderLeaflet({
+    req(selected_carpark())
+    carpark <- selected_carpark()
+    attractions <- nearby_attractions()
+    
+    leaflet() %>%
+      addTiles() %>%
+      addMarkers(
+        lng = carpark$carpark_lon,
+        lat = carpark$carpark_lat,
+        popup = paste0("Carpark: ", carpark$address),
+        label = "Carpark Location",
+        icon = icons(iconUrl = "https://example.com/carpark_icon.png", iconSize = c(25, 25))
+      ) %>%
+      # Add circle for search radius
+      addCircles(
+        lng = carpark$carpark_lon,
+        lat = carpark$carpark_lat,
+        radius = input$distance * 1000,  # Convert km to meters
+        color = "red",
+        fillOpacity = 0.1
+      ) %>%
+      # Add markers for attractions if any are found
+      addMarkers(
+        data = attractions,
+        lng = ~longitude,
+        lat = ~latitude,
+        popup = ~paste(
+          "<strong>", name, "</strong><br>",
+          "Distance: ", distance_km, " km<br>",
+          description
+        ),
+        label = ~name
+      )
+  })
+  
+  # Render a table with nearby attractions
+  output$attraction_list <- renderTable({
+    nearby_attractions()
+  })
   
   #######################################################
-  
-  # making the API to see the availability of the carpark that they have chosen
-  ### need work:
-  #### 1) update so that we do the available slots, % capacity, and maybe traffic light
-  get_carpark_availability_reactive <- reactive({
-    #taking the date and time from the input and appending it into the API URL
-    date <- as.character(input$date)
-    time <- strftime(input$time, "%T")
-    url = "https://api.data.gov.sg/v1/transport/carpark-availability?date_time="
-    url_availability <- paste0(url,date,"T",time)
-    # checks
-    print(date)
-    print(time)
-    print(url_availability)
-    
-    # calling the API
-    data_availability <- RcppSimdJson::fparse(GET(url_availability)$content)
-    
-    carpark <- setDT(data$items$carpark_data[[1]][,2:3])
-    carpark_info <- setDT(data$items$carpark_data[[1]][,1])
-    carpark$update_datetime <- rep(datetime, length(carpark[[1]]))
-    carpark$total_lots <- sapply(carpark_info, `[[`, 1)
-    carpark$lot_type <- sapply(carpark_info, `[[`, 2)
-    carpark$lots_available <- sapply(carpark_info, `[[`, 3)
-    
-    carpark <- carpark %>% 
-      unnest(cols = c(total_lots, lot_type, lots_available))
-    
-    setDT(carpark)
-    
-    carpark[, c("total_lots", "lots_available") := lapply(.SD, as.numeric), .SDcols = c("total_lots", "lots_available")]
-    
-    return(carpark)
-  })
-  
-  carpark_historic_data_get_reactive <- reactive({
-    print(class(input$date))
-    
-    date <- as.character(input$date)
-    time <- strftime(input$time, "%T")
-    
-    print("New data")
-    
-    url = "https://api.data.gov.sg/v1/transport/taxi-availability?date_time="
-    url <- paste0(url,date,"T",time)
-    data <- fromJSON(url)
-    data <- as.data.frame(data$features$geometry$coordinates)
-    colnames(data) <- c("long","lat")
-    data
-  })
-  
-  
-  # plotting out the map
-  output$plotAvailability <-renderLeaflet(
-    {
-      
-      if(date>today)
-        retrun
-      # must be the same as the inputID in the ui i.e. input$date
-      date <- as.character(input$date)
-      time <- strftime(input$time, "%T")
-      
-      
-      data <- getAvailabilityData(date,time)
-      
-      
-      if(input$format=='Point') {
-        
-        m <- addCircleMarkers(m, 
-                              lng=data$long,
-                              lat=data$lat, 
-                              radius=3,
-                              stroke = FALSE, 
-                              fillOpacity = 1
-        )
-      }
-      else if (input$format == 'Heatmap'){
-        
-        m<- addWebGLHeatmap(m,
-                            lng=data$long, 
-                            lat=data$lat, 
-                            size = 600)
-      }
-      else {print("Wrong format name")}
-      m
-    }
-  )
+
 }
 
 shinyApp(ui = ui, server = server)
