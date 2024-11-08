@@ -218,3 +218,23 @@ addScriptDependencies <- function(map) {
 }
 
 
+# JS Code for yhMap -------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

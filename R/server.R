@@ -21,6 +21,7 @@ library(purrr)
 library(parallel)
 library(rlang)
 library(geosphere)
+library(leaflet.providers)
 
 # Load Sources & Datasets -------------------------------------------------
 source("R/data manager.R")
@@ -60,6 +61,16 @@ yhMapServer <- function(id){
         filter(distance_km <= input$distance) 
     })
     
+    # Store and Observe Layer Changes -----------------------------------------
+    current_base <- reactiveVal("Default")
+    # Observe layer changes
+    observeEvent(input[[paste0(id, "_groups")]], {
+      if(!is.null(input[[paste0(id, "_groups")]]$base)) {
+        current_base(input[[paste0(id, "_groups")]]$base)
+      }
+    }, ignoreInit = TRUE)
+
+    
     # Map plotting ------------------------------------------------------------
     
     
@@ -77,64 +88,24 @@ yhMapServer <- function(id){
       
       req(selected_carpark())
       carpark <- selected_carpark()
+      base <- current_base()
       
-      carparkIcon <- makeAwesomeIcon(
-        icon = 'car',
-        markerColor = 'orange',
-        iconColor = 'black',
-        library = 'fa'
-      )
-      
-      poiIcon <- makeAwesomeIcon(
-        icon = 'info-sign',
-        markerColor = 'blue',
-        iconColor = 'white',
-        library = 'glyphicon'  # Using glyphicon instead of fa for POIs
-      )
-      
-      # Create base map with carpark marker
-      map <- leaflet() %>%
-        
-        addProviderTiles(providers$CartoDB.Positron, 
-                         options = providerTileOptions(opacity = 0.8)) %>%
-        
-        setView(lng = carpark$longitude, lat = carpark$latitude, zoom = 13) %>%
-        
-        #Add satellite view option
-        addProviderTiles(providers$Esri.WorldImagery,
-        group = "Satellite") %>%
-        
-        # Layer controls
-        addLayersControl(
-        baseGroups = c("Default", "Satellite"),
-        overlayGroups = c("Search Radius"),
-        options = layersControlOptions(collapsed = FALSE)
-        ) %>%
-        
-        addScaleBar(position = "bottomleft") %>%
-        
-        # Adding and changing the carpark marker to have a different colour and icon from the location markers
-        addAwesomeMarkers(
-          lng = carpark$longitude,
-          lat = carpark$latitude,
-          popup = paste0("Carpark: ", carpark$address),
-          label = "Carpark Location",
-          icon = carparkIcon
-        ) %>%
-        # Initialize routing machine
-        htmlwidgets::onRender(sprintf("
+      # JS Code -----------------------------------------------------------------
+      js_init <- paste0("
           function(el, x) {
             var map = this;
             
             // Initialize global variables
             window.yhMap = {
               map: map,
-              carparkLocation: [%s, %s],
+              carparkLocation: [", carpark$latitude, ", ", carpark$longitude, "],
               routeGroup: L.featureGroup().addTo(map),
               currentMode: 'mapbox/driving'
-            };
-            
-            // Add route group to layer control
+            };"
+                        
+      )
+      
+      js_styles <- "// Add route group to layer control
             map.layerManager.addLayer(window.yhMap.routeGroup, 'overlay', 'Routes');
             
              // Add custom styles
@@ -223,9 +194,9 @@ yhMapServer <- function(id){
                 color: #333;
               }
             `;
-            document.head.appendChild(style);
-            
-            // Create mode selector
+            document.head.appendChild(style);"
+      
+      js_mode_selector <- "// Create mode selector
             var modeSelector = document.createElement('div');
             modeSelector.className = 'mode-selector';
             modeSelector.innerHTML = `
@@ -257,9 +228,8 @@ yhMapServer <- function(id){
                   );
                 }
               });
-            }
-            
-            // Initialize routing control
+            }"
+      js_routing <- "// Initialize routing control
             window.yhMap.routingControl = L.Routing.control({
               waypoints: [],
               router: L.Routing.mapbox('pk.eyJ1IjoiZ3h5MjExMSIsImEiOiJjbTMzYmlwYTgxOXkwMmpwdHZvOGpzMDB0In0.8oK_lsM_cieDesH8Tht8rg', {
@@ -290,9 +260,9 @@ yhMapServer <- function(id){
               window.yhMap.routingControl.setWaypoints([]);
               window.yhMap.currentDestination = null;
             };
-            container.appendChild(closeButton);
-            
-            // Route event handlers
+            container.appendChild(closeButton);"
+      
+      js_events <- "// Route event handlers
             window.yhMap.routingControl.on('routesfound', function(e) {
               window.yhMap.routeGroup.clearLayers();
               if (e.routes && e.routes.length > 0) {
@@ -321,11 +291,67 @@ yhMapServer <- function(id){
                 L.latLng(lat, lng)
               ]);
             };
-          }
-        ", carpark$latitude, carpark$longitude))
+          }"
       
-      # Adding the distance boundary --------------------------------------------
+      full_js <- paste0(js_init, js_styles, js_mode_selector, js_routing, js_events)
       
+
+      # Awesome Icon Definition -------------------------------------------------
+      carparkIcon <- makeAwesomeIcon(
+        icon = 'car',
+        markerColor = 'orange',
+        iconColor = 'black',
+        library = 'fa'
+      )
+      
+      poiIcon <- makeAwesomeIcon(
+        icon = 'info-sign',
+        markerColor = 'blue',
+        iconColor = 'white',
+        library = 'glyphicon'
+      )
+      
+      # Create Map ------------------------------------------------------------
+      map <- leaflet() %>%
+        
+        addProviderTiles(providers$CartoDB.Positron, 
+                         options = providerTileOptions(opacity = 0.8)) %>%
+        
+        setView(lng = carpark$longitude, lat = carpark$latitude, zoom = 13) %>%
+        
+        #Add satellite view option
+        addProviderTiles(providers$Esri.WorldImagery,
+        group = "Satellite") %>%
+        
+        addTiles(
+          "https://tile.jawg.io/jawg-terrain/{z}/{x}/{y}{r}.png?access-token=1p9UKwNKybQStlgch3s3NTAQyIxOK9pNuoKgIBW0al1jI2Oum2nK7I6YH6a2VJUm",
+          options = tileOptions(
+            attribution = '<a href=\"https://www.jawg.io?utm_medium=map&utm_source=attribution\" target=\"_blank\">&copy; Jawg</a> - <a href=\"https://www.openstreetmap.org?utm_medium=map-attribution&utm_source=jawg\" target=\"_blank\">&copy; OpenStreetMap</a>&nbsp;contributors',
+            minZoom = 0,
+            maxZoom = 22
+            ),
+          group = "Terrain"
+        ) %>%
+        
+        # Layer controls
+        addLayersControl(
+        baseGroups = c("Default", "Satellite", "Terrain"),
+        overlayGroups = c("Search Radius"),
+        options = layersControlOptions(collapsed = FALSE)
+        ) %>%
+        
+        addScaleBar(position = "bottomleft") %>%
+        
+        # Adding and changing the carpark marker to have a different colour and icon from the location markers
+        addAwesomeMarkers(
+          lng = carpark$longitude,
+          lat = carpark$latitude,
+          popup = paste0("Carpark: ", carpark$address),
+          label = "Carpark Location",
+          icon = carparkIcon
+        ) %>%
+        # Initialize routing machine
+        htmlwidgets::onRender(full_js)
       
       # Only add circle and attractions if distance is greater than 0
       if (input$distance > 0) {
@@ -388,26 +414,48 @@ yhMapServer <- function(id){
           "\n")
     })
     
-    # Attraction list table ---------------------------------------------------
-    
-    
     # modify the attractions table to show nothing when distance is 0
-    output$attraction_list <- renderTable({
+    output$attraction_list <- DT::renderDataTable({
       req(selected_carpark())
       if (input$distance > 0) {
-        nearby_attractions()
+        nearby_attractions() %>%
+          select(PAGETITLE, ADDRESS, OVERVIEW, distance_km) %>%
+          rename(
+            Name = PAGETITLE,
+            Adress = ADDRESS,
+            Description = OVERVIEW,
+            Distance = distance_km
+          ) %>%
+        mutate(
+            Distance = sprintf("%.2f km", Distance)
+          )
       } else {
         # Return empty data frame with same structure
         data.frame(
-          PAGETITLE = character(),
-          ADDRESS = character(),
-          OVERVIEW = character(),
-          distance_km = numeric(),
-          longitude = numeric(),
-          latitude = numeric(),
+          Name = character(),
+          Address = character(),
+          Description = character(),
+          Distance = character(),
           stringsAsFactors = FALSE
         )
       }
-    })
+    }, 
+    options = list(
+      dom = 't',
+      scrollY = "250px",  # Set a fixed height for the scrollable area
+      scrollCollapse = TRUE,
+      paging = FALSE,
+      searching = FALSE,
+      info = FALSE,
+      columnDefs = list(
+        list(
+          targets = 0:3, # columns for text alignment
+          className = 'dt-left'
+        )
+      )
+    ),
+    rownames = FALSE,
+    escape = FALSE
+    )
   })
 }
