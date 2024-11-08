@@ -13,7 +13,7 @@ rainfall <- setDT(vroom("rainfall_data.csv", col_types = "_cnnnT"))
 temp <- setDT(vroom("temperature_data.csv", col_types = "_ccnnnT"))
 wind <- setDT(vroom("windspeed_data.csv", col_types = "_ccnnnT"))
 
-# Data Cleaning -----------------------------------------------------------
+# General Data Cleaning -----------------------------------------------------------
 setnames(rainfall, c("Longtitude", "Latitude"), c("longtitude", "latitude"))
 setnames(temp, "temperature", "value")
 unique_cp <- unique(carpark_raw$carpark_number)
@@ -22,18 +22,19 @@ cp_without_loc <- unique_cp[!unique_cp %in% carpark_info$car_park_no]
 carpark <- carpark_raw[!carpark_number %in% cp_without_loc]
 unique_cp_df <- unique_cp_df[!id %in% cp_without_loc]
 
+# Cleaning Carpark Information --------------------------------------------
+carpark_info_sf <- st_as_sf(carpark_info, 
+                         coords = c("x_coord", "y_coord"), 
+                         crs = 3414) %>% st_transform(crs = 4326)
+carpark_info[, c("longtitude", "latitude") := as.data.table(st_coordinates(carpark_info_sf))]
+carpark_info[, c("x_coord", "y_coord") := NULL]
+
+write.csv(carpark_info, "carpark_info.csv")
+
 # Merge Carpark and Weather data ------------------------------------------
 #merge x and y coord to carpark id
-cp_locations <- merge(unique_cp_df, carpark_info[, .(car_park_no, x_coord, y_coord)],
+cp_locations <- merge(unique_cp_df, carpark_info[, .(car_park_no, longtitude, latitude)],
                       by.x = "id", by.y = "car_park_no", all.x = T)
-
-#convert x and y coord to longtitude and latitude
-cp_locations_sf <- st_as_sf(cp_locations, 
-                            coords = c("x_coord", "y_coord"), 
-                            crs = 3414)
-cp_locations_transformed <- st_transform(cp_locations_sf, crs = 4326)
-cp_locations[, c("longtitude", "latitude") := as.data.table(st_coordinates(cp_locations_transformed))]
-cp_locations[, c("x_coord", "y_coord") := NULL]
 
 #function for measuring dist
 closest_st <- function(carpark, weather){
@@ -82,5 +83,4 @@ carpark_merge_final <- carpark_merge_val[, c("longtitude", "latitude", "humidity
 setnames(carpark_merge_final, "update_datetime", "datetime")
 carpark_merge_final_cleaned <- na.omit(carpark_merge_final)
 
-write.csv(carpark_merge_final_cleaned, "merged_data.csv")
-
+write.csv(carpark_merge_final_cleaned, "carpark_merged_data.csv")

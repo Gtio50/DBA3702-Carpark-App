@@ -2,6 +2,26 @@ library(ggplot2)
 library(plotly)
 library(dplyr)
 library(lubridate)
+library(jsonlite)
+library(sf)
+library(shiny)
+library(shinyTime)
+library(leaflet)
+library(leaflet.extras)
+library(shinycssloaders)
+library(jsonlite)
+library(curl)
+library(tidyr)
+library(data.table)
+library(httr)
+library(RcppSimdJson)
+library(rbenchmark)
+library(furrr)
+library(future)
+library(purrr)
+library(parallel)
+library(rlang)
+library(geosphere)
 
 # Time Series Plot --------------------------------------------------------
 create_time_series_plot <- function(data, 
@@ -155,3 +175,66 @@ create_decomposition_plot <- function(data,
   subplot(p1, p2, p3, p4, nrows = 4, shareX = TRUE) %>%
     layout(title = title)
 }
+# Filter For Single Location -----------------------------------------------------
+filter_single_location <- function(df, input_loc, address_col = "address"){
+  address_col = enquo(address_col)
+  df %>% filter(.data[[address_col]] == input_loc) %>%
+    transmute(
+      address = .data[[address_col]],
+      latitude,
+      longitude
+    )
+}
+# Nearby POI --------------------------------------------------------------
+all_nearby_poi <- function(current_loc, pois, cols = 
+                             c("PAGETITLE", "ADDRESS", "OVERVIEW",
+                               "distance_km", "longitude", "latitude")){
+  current_coords <- c(current_loc$longitude, current_loc$latitude)
+  smth <- pois %>%
+    mutate(
+      distance = geosphere::distHaversine(
+        cbind(longitude, latitude),  
+        matrix(current_coords, ncol = 2, byrow = TRUE)
+      ),
+      distance_km = round(distance / 1000, 2)
+    ) %>%
+    select(all_of(cols)
+    )
+}
+
+# Leaflet Script Dependencies ---------------------------------------------
+addScriptDependencies <- function(map) {
+  map$dependencies <- c(
+    map$dependencies,
+    htmlDependency(
+      "routing",
+      "1.0.0",
+      src = c(href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet-routing-machine/3.2.12/"),
+      script = "leaflet-routing-machine.min.js",
+      stylesheet = "leaflet-routing-machine.css"
+    )
+  )
+  return(map)
+}
+
+
+# JS Code for yhMap -------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
